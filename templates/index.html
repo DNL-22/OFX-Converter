@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF → OFX</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg:       #0C0E14;
+  --card:     #13161F;
+  --card2:    #1A1E2B;
+  --border:   #252A3A;
+  --accent:   #22D3A5;
+  --accent-d: #17A880;
+  --amber:    #F5A623;
+  --red:      #F05252;
+  --text:     #DDE2F0;
+  --muted:    #6B7394;
+  --mono:     'IBM Plex Mono', monospace;
+  --sans:     'IBM Plex Sans', sans-serif;
+}
+
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--sans)}
+
+/* ── Layout ── */
+.wrap{
+  min-height:100vh;
+  display:grid;
+  grid-template-rows:auto 1fr auto;
+  max-width:860px;
+  margin:0 auto;
+  padding:0 20px;
+}
+
+/* ── Header ── */
+header{
+  display:flex;align-items:center;gap:14px;
+  padding:32px 0 28px;
+  border-bottom:1px solid var(--border);
+}
+.logo{
+  width:38px;height:38px;border-radius:9px;
+  background:var(--accent);
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;
+}
+.logo svg{display:block}
+header h1{
+  font-family:var(--mono);
+  font-size:1.35rem;font-weight:600;letter-spacing:-.5px;
+}
+header span{color:var(--accent)}
+header p{font-size:.78rem;color:var(--muted);margin-top:2px}
+
+/* ── Main card ── */
+main{padding:36px 0 48px}
+
+.card{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:32px;
+  margin-bottom:24px;
+}
+
+.section-label{
+  font-family:var(--mono);
+  font-size:.65rem;font-weight:600;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted);
+  margin-bottom:16px;
+}
+
+/* ── Form row ── */
+.row-2{display:grid;grid-template-columns:1fr auto;gap:16px}
+
+label.field{display:flex;flex-direction:column;gap:7px}
+label.field span{
+  font-size:.75rem;font-weight:500;color:var(--muted);
+  letter-spacing:.04em;text-transform:uppercase;
+}
+
+input[type=text],select{
+  background:var(--card2);
+  border:1px solid var(--border);
+  border-radius:8px;
+  color:var(--text);
+  font-family:var(--sans);
+  font-size:.9rem;
+  padding:10px 14px;
+  outline:none;
+  transition:border-color .2s;
+}
+input[type=text]:focus,select:focus{border-color:var(--accent)}
+input[type=text]::placeholder{color:var(--muted)}
+select{cursor:pointer;min-width:220px}
+select option{background:#1A1E2B}
+
+/* ── Drop zone ── */
+.dropzone{
+  border:2px dashed var(--border);
+  border-radius:12px;
+  padding:40px 24px;
+  text-align:center;
+  cursor:pointer;
+  transition:border-color .2s,background .2s;
+  position:relative;
+  margin-top:24px;
+}
+.dropzone.hover{border-color:var(--accent);background:rgba(34,211,165,.05)}
+.dropzone input{
+  position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;
+}
+.dz-icon{
+  width:44px;height:44px;border-radius:50%;
+  background:var(--card2);border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;
+  margin:0 auto 14px;
+}
+.dropzone h3{font-size:.9rem;font-weight:500;margin-bottom:5px}
+.dropzone p{font-size:.78rem;color:var(--muted)}
+.dz-label{
+  display:inline-block;margin-top:14px;
+  font-size:.75rem;font-family:var(--mono);
+  padding:5px 12px;border-radius:20px;
+  background:var(--card2);border:1px solid var(--border);
+  color:var(--muted);
+}
+
+/* ── File list ── */
+#file-list{margin-top:18px;display:none;flex-direction:column;gap:8px}
+.file-item{
+  display:flex;align-items:center;gap:10px;
+  background:var(--card2);border:1px solid var(--border);
+  border-radius:8px;padding:9px 14px;
+  font-size:.82rem;
+}
+.file-item .fi-icon{
+  width:26px;height:26px;border-radius:6px;
+  background:rgba(34,211,165,.12);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.file-item .fi-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-item .fi-size{color:var(--muted);font-size:.72rem;font-family:var(--mono);white-space:nowrap}
+.file-rm{
+  background:none;border:none;cursor:pointer;
+  color:var(--muted);padding:2px;border-radius:4px;
+  line-height:1;font-size:.85rem;
+  transition:color .15s;
+}
+.file-rm:hover{color:var(--red)}
+
+/* ── Convert button ── */
+#btn-convert{
+  width:100%;margin-top:24px;
+  background:var(--accent);color:#0C0E14;
+  border:none;border-radius:10px;
+  font-family:var(--sans);font-size:.92rem;font-weight:600;
+  padding:13px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:9px;
+  transition:background .2s,opacity .2s;
+}
+#btn-convert:hover{background:var(--accent-d)}
+#btn-convert:disabled{opacity:.45;cursor:not-allowed}
+
+/* ── Status area ── */
+#status{display:none;margin-top:20px}
+.status-ok{
+  display:flex;align-items:flex-start;gap:12px;
+  background:rgba(34,211,165,.08);
+  border:1px solid rgba(34,211,165,.25);
+  border-radius:10px;padding:16px;
+}
+.status-ok .s-icon{
+  width:28px;height:28px;flex-shrink:0;border-radius:50%;
+  background:rgba(34,211,165,.2);
+  display:flex;align-items:center;justify-content:center;
+}
+.status-ok .s-text{font-size:.85rem;line-height:1.5}
+.status-ok .s-title{font-weight:600;color:var(--accent);margin-bottom:3px}
+
+.status-err{
+  display:flex;align-items:flex-start;gap:12px;
+  background:rgba(240,82,82,.08);
+  border:1px solid rgba(240,82,82,.25);
+  border-radius:10px;padding:16px;
+}
+.status-err .s-icon{
+  width:28px;height:28px;flex-shrink:0;border-radius:50%;
+  background:rgba(240,82,82,.2);
+  display:flex;align-items:center;justify-content:center;
+}
+.status-err .s-title{font-weight:600;color:var(--red);margin-bottom:3px}
+.status-err .s-text{font-size:.85rem;line-height:1.5}
+
+/* ── Spinner ── */
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinner{
+  width:18px;height:18px;
+  border:2px solid rgba(12,14,20,.4);
+  border-top-color:#0C0E14;
+  border-radius:50%;
+  animation:spin .7s linear infinite;
+}
+
+/* ── Info panel ── */
+.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:4px}
+.info-cell{
+  background:var(--card2);border:1px solid var(--border);
+  border-radius:8px;padding:14px 16px;
+}
+.info-cell dt{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
+.info-cell dd{font-family:var(--mono);font-size:.82rem;color:var(--text)}
+
+/* ── Footer ── */
+footer{
+  border-top:1px solid var(--border);
+  padding:18px 0;
+  font-size:.72rem;color:var(--muted);
+  display:flex;justify-content:space-between;align-items:center;
+}
+.bank-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--card2);border:1px solid var(--border);
+  border-radius:20px;padding:3px 10px;font-family:var(--mono);font-size:.68rem;
+  color:var(--muted);
+}
+.bank-badge .dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+/* ── Format toggle ── */
+.fmt-toggle{
+  display:flex;gap:6px;margin-top:16px;
+}
+.fmt-btn{
+  flex:1;padding:9px 8px;border-radius:8px;cursor:pointer;
+  font-family:var(--mono);font-size:.75rem;font-weight:600;letter-spacing:.04em;
+  border:1px solid var(--border);background:var(--card2);color:var(--muted);
+  transition:all .15s;display:flex;align-items:center;justify-content:center;gap:7px;
+}
+.fmt-btn.active{
+  border-color:var(--accent);color:var(--accent);background:rgba(34,211,165,.08);
+}
+.fmt-btn svg{flex-shrink:0}
+
+/* ── CSV grouping sub-toggle ── */
+#csv-grouping{
+  display:none;   /* shown via JS when CSV is active */
+  margin-top:8px;
+}
+#csv-grouping .sub-label{
+  font-size:.68rem;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;
+  margin-bottom:6px;font-family:var(--mono);
+}
+.grp-toggle{display:flex;gap:5px}
+.grp-btn{
+  flex:1;padding:7px 8px;border-radius:7px;cursor:pointer;
+  font-family:var(--mono);font-size:.7rem;font-weight:600;letter-spacing:.04em;
+  border:1px solid var(--border);background:var(--card2);color:var(--muted);
+  transition:all .15s;
+}
+.grp-btn.active{
+  border-color:rgba(34,211,165,.5);color:var(--accent);background:rgba(34,211,165,.06);
+}
+
+/* ── Shutdown button ── */
+#btn-shutdown{
+  background:none;border:1px solid var(--border);border-radius:8px;
+  color:var(--muted);font-family:var(--sans);font-size:.72rem;
+  padding:5px 11px;cursor:pointer;
+  display:flex;align-items:center;gap:6px;
+  transition:color .15s,border-color .15s;
+}
+#btn-shutdown:hover{color:var(--red);border-color:var(--red)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ── Header ── -->
+<header>
+  <div class="logo">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+      <rect x="2" y="5" width="16" height="11" rx="2" stroke="#0C0E14" stroke-width="1.8"/>
+      <path d="M2 8.5h16" stroke="#0C0E14" stroke-width="1.8"/>
+      <circle cx="5.5" cy="12.5" r="1" fill="#0C0E14"/>
+      <circle cx="9" cy="12.5" r="1" fill="#0C0E14"/>
+    </svg>
+  </div>
+  <div>
+    <h1>PDF <span>→</span> <span id='fmt-label'>OFX</span></h1>
+    <p>Conversor de Extratos Bancários</p>
+  </div>
+</header>
+
+<!-- ── Main ── -->
+<main>
+
+  <!-- Conversion form -->
+  <div class="card">
+    <p class="section-label">Configuração</p>
+
+    <div class="row-2">
+      <label class="field">
+        <span>Nome da Empresa</span>
+        <input type="text" id="company" placeholder="Ex.: Loja Exemplo LTDA" autocomplete="off">
+      </label>
+
+      <label class="field">
+        <span>Banco</span>
+        <select id="bank">
+          {% for key, b in banks.items() %}
+          <option value="{{ key }}">{{ b.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+
+    <!-- Format toggle -->
+    <div class="fmt-toggle" id="fmt-toggle">
+      <button type="button" class="fmt-btn active" data-fmt="ofx">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/>
+          <polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/>
+        </svg>
+        OFX
+      </button>
+      <button type="button" class="fmt-btn" data-fmt="csv">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/>
+          <polyline points="10 9 9 9 8 9"/>
+        </svg>
+        CSV
+      </button>
+    </div>
+
+    <!-- CSV grouping sub-toggle (shown only when CSV is active) -->
+    <div id="csv-grouping">
+      <p class="sub-label">Agrupamento</p>
+      <div class="grp-toggle">
+        <button type="button" class="grp-btn active" data-grp="month">Por mês</button>
+        <button type="button" class="grp-btn" data-grp="single">Arquivo único</button>
+      </div>
+    </div>
+
+    <!-- Drop zone -->
+    <div class="dropzone" id="dz">
+      <input type="file" id="file-input" accept=".pdf" multiple>
+      <div class="dz-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+      </div>
+      <h3>Arraste os PDFs aqui</h3>
+      <p>ou clique para selecionar os arquivos</p>
+      <span class="dz-label">Conversão em lote suportada</span>
+    </div>
+
+    <!-- File list -->
+    <div id="file-list"></div>
+
+    <!-- Convert button -->
+    <button id="btn-convert" disabled>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <polyline points="16 3 21 3 21 8"/>
+        <line x1="4" y1="20" x2="21" y2="3"/>
+        <polyline points="21 16 21 21 16 21"/>
+        <line x1="15" y1="15" x2="21" y2="21"/>
+      </svg>
+      Converter
+    </button>
+
+    <!-- Status -->
+    <div id="status"></div>
+  </div>
+
+  <!-- Info panel -->
+  <div class="card">
+    <p class="section-label">Bancos Suportados</p>
+    <div class="info-grid">
+      {% for key, b in banks.items() %}
+      <div class="info-cell">
+        <dt>{{ b.label }}</dt>
+        <dd>BANKID {{ b.bankid }} · ISPB {{ b.fid }}</dd>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+</main>
+
+<!-- ── Footer ── -->
+<footer>
+  <span>Extrato de Conta Corrente — Formato OFX 1.02 &nbsp;·&nbsp; <span style="color:var(--accent);font-family:var(--mono)">v{{ version }}</span></span>
+  <div style="display:flex;align-items:center;gap:12px">
+    <button id="btn-shutdown" title="Encerrar servidor">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <path d="M18.36 6.64A9 9 0 1 1 5.64 6.64"/><line x1="12" y1="2" x2="12" y2="12"/>
+      </svg>
+      Encerrar servidor
+    </button>
+    <span class="bank-badge"><span class="dot"></span>Processamento local</span>
+  </div>
+</footer>
+
+</div><!-- .wrap -->
+
+<script>
+(function(){
+  const dz        = document.getElementById('dz');
+  const fileInput = document.getElementById('file-input');
+  const fileList  = document.getElementById('file-list');
+  const btnConv   = document.getElementById('btn-convert');
+  const statusEl  = document.getElementById('status');
+  const companyEl = document.getElementById('company');
+  const bankEl    = document.getElementById('bank');
+
+  let files = [];   // our managed file list
+
+  // ── Drag & drop ──
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('hover'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('hover'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault();
+    dz.classList.remove('hover');
+    addFiles([...e.dataTransfer.files]);
+  });
+  fileInput.addEventListener('change', e => {
+    addFiles([...e.target.files]);
+    fileInput.value = '';
+  });
+
+  function addFiles(newFiles) {
+    newFiles.forEach(f => {
+      if (f.name.toLowerCase().endsWith('.pdf') && !files.find(x => x.name === f.name))
+        files.push(f);
+    });
+    renderList();
+  }
+
+  function removeFile(name) {
+    files = files.filter(f => f.name !== name);
+    renderList();
+  }
+
+  function fmtSize(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
+    return (b/1024/1024).toFixed(1) + ' MB';
+  }
+
+  function renderList() {
+    fileList.innerHTML = '';
+    if (files.length === 0) {
+      fileList.style.display = 'none';
+      btnConv.disabled = true;
+      return;
+    }
+    fileList.style.display = 'flex';
+    files.forEach(f => {
+      const el = document.createElement('div');
+      el.className = 'file-item';
+      el.innerHTML = `
+        <div class="fi-icon">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2">
+            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+            <polyline points="13 2 13 9 20 9"/>
+          </svg>
+        </div>
+        <span class="fi-name" title="${esc(f.name)}">${esc(f.name)}</span>
+        <span class="fi-size">${fmtSize(f.size)}</span>
+        <button class="file-rm" data-name="${esc(f.name)}" title="Remover">✕</button>`;
+      fileList.appendChild(el);
+    });
+    // Remove buttons
+    fileList.querySelectorAll('.file-rm').forEach(btn => {
+      btn.addEventListener('click', () => removeFile(btn.dataset.name));
+    });
+    btnConv.disabled = files.length === 0;
+  }
+
+  function esc(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ── Format toggle ──
+  let currentFormat = 'ofx';
+  let currentGrouping = 'month';
+  const csvGroupingEl = document.getElementById('csv-grouping');
+
+  document.querySelectorAll('.fmt-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.fmt-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentFormat = btn.dataset.fmt;
+      document.getElementById('fmt-label').textContent = btn.dataset.fmt.toUpperCase();
+      csvGroupingEl.style.display = currentFormat === 'csv' ? 'block' : 'none';
+    });
+  });
+
+  document.querySelectorAll('.grp-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.grp-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentGrouping = btn.dataset.grp;
+    });
+  });
+
+  // ── Convert ──
+  btnConv.addEventListener('click', async () => {
+    const company = companyEl.value.trim();
+    if (!company) {
+      companyEl.focus();
+      showStatus('error', 'Informe o nome da empresa.');
+      return;
+    }
+    if (files.length === 0) return;
+
+    setLoading(true);
+    hideStatus();
+
+    const fd = new FormData();
+    fd.append('company', company);
+    fd.append('bank', bankEl.value);
+    fd.append('format', currentFormat);
+    fd.append('csv_grouping', currentGrouping);
+    files.forEach(f => fd.append('pdfs', f));
+
+    try {
+      const res = await fetch('/convert', { method: 'POST', body: fd });
+
+      if (!res.ok) {
+        let msg = 'Erro na conversão.';
+        try { const j = await res.json(); msg = j.error || msg; } catch {}
+        showStatus('error', msg);
+        return;
+      }
+
+      // Determine filename from Content-Disposition
+      const cd = res.headers.get('Content-Disposition') || '';
+      const m  = cd.match(/filename[^;=\n]*=["']?([^"'\n;]+)["']?/);
+      const fname = m ? m[1] : (files.length > 1 ? 'ofx_convertidos.zip' : 'extrato.ofx');
+
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = fname; a.click();
+      URL.revokeObjectURL(url);
+
+      const plural = files.length > 1;
+      showStatus('ok',
+        `<div class="s-title">Download iniciado!</div>
+         <div>${files.length} arquivo${plural?'s':''} convertido${plural?'s':''} → <strong>${esc(fname)}</strong></div>`
+      );
+
+    } catch(err) {
+      showStatus('error', 'Falha de rede: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  function setLoading(on) {
+    btnConv.disabled = on;
+    btnConv.innerHTML = on
+      ? '<div class="spinner"></div> Convertendo…'
+      : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+           <polyline points="16 3 21 3 21 8"/>
+           <line x1="4" y1="20" x2="21" y2="3"/>
+           <polyline points="21 16 21 21 16 21"/>
+           <line x1="15" y1="15" x2="21" y2="21"/>
+         </svg> Converter`;
+  }
+
+  function showStatus(type, html) {
+    statusEl.style.display = 'block';
+    const icon = type === 'ok'
+      ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`
+      : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+    statusEl.innerHTML =
+      `<div class="status-${type==='ok'?'ok':'err'}">
+         <div class="s-icon">${icon}</div>
+         <div class="s-text">${html}</div>
+       </div>`;
+  }
+
+  function hideStatus() { statusEl.style.display = 'none'; statusEl.innerHTML = ''; }
+  // ── Shutdown ──
+  document.getElementById('btn-shutdown').addEventListener('click', async () => {
+    if (!confirm('Encerrar o servidor?')) return;
+    try {
+      await fetch('/shutdown', { method: 'POST' });
+      document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:monospace;color:#6B7394;background:#0C0E14">Servidor encerrado.</div>';
+    } catch {}
+  });
+})();
+</script>
+</body>
+</html>

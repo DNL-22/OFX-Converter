@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv
+venv/
+*.egg-info/
+dist/
+.DS_Store
+Thumbs.db
+*.pdf
+*.ofx
+*.csv
+*.zip
+instance/
