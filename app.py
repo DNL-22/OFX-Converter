@@ -11,7 +11,7 @@ try:
 except ImportError:
     PYMUPDF_OK = False
 
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
@@ -46,6 +46,12 @@ BANKS = {
         "bankid": "033",
         "fid":    "033",
         "org":    "Banco Santander (Brasil) S.A.",
+    },
+    "itau": {
+        "label":  "Itau",
+        "bankid": "341",
+        "fid":    "341",
+        "org":    "Itau Unibanco S.A.",
     },
 }
 
@@ -880,6 +886,80 @@ def _parse_santander(pdf_path):
 
 
 # ═══════════════════════════════════════════════
+#  FORMAT ITAU — "Lançamentos do período"
+#  Value-anchored: DATE → desc lines → [CNPJ/CPF] → VALUE
+# ═══════════════════════════════════════════════
+
+ITAU_DATE_RE  = re.compile(r'^\d{2}/\d{2}/\d{4}$')
+ITAU_VALUE_RE = re.compile(r'^-?[\d.]+,\d{2}$')
+ITAU_DOC_RE   = re.compile(r'^\d{2,3}\.\d{3}\.\d{3}[-/]')  # CNPJ or CPF
+
+ITAU_SKIP_DESC = {
+    'saldo total disponível dia', 'saldo anterior',
+    'data', 'lançamentos', 'razão social',
+    'cnpj/cpf', 'valor (r$)', 'saldo (r$)',
+}
+ITAU_STOP_STARTS = (
+    'aviso:', 'os saldos acima', 'em caso de dúvidas',
+    'atualizado em', 'reclamações, informações',
+)
+
+def _itau_is_stop(line):
+    lo = line.lower().strip()
+    return any(lo.startswith(s) for s in ITAU_STOP_STARTS)
+
+def _parse_itau(pdf_path):
+    doc = fitz.open(pdf_path)
+    pages = [doc[i].get_text('text') for i in range(len(doc))]
+    doc.close()
+    full = '\n'.join(pages)
+
+    agency, account = '', ''
+    m = re.search(r'Ag[eê]ncia\s*\n[\s\n]*(\d+)\s*Conta\s*([\d\-]+)', full, re.I)
+    if m:
+        agency  = m.group(1).strip()
+        account = re.sub(r'[^\d]', '', m.group(2))
+
+    lines = [l.strip() for l in full.splitlines()]
+    transactions = []
+    current_date = None
+    desc_parts   = []
+
+    def flush(amount_str):
+        nonlocal current_date, desc_parts
+        if not current_date or not desc_parts:
+            current_date, desc_parts = None, []
+            return
+        desc = ' '.join(desc_parts).strip()
+        if desc.lower() in ITAU_SKIP_DESC or desc.lower().startswith('saldo'):
+            current_date, desc_parts = None, []
+            return
+        neg    = amount_str.startswith('-')
+        v      = float(amount_str.lstrip('-').replace('.', '').replace(',', '.'))
+        amount = -v if neg else v
+        transactions.append({'date': current_date, 'desc': desc,
+                              'amount': amount,
+                              'trntype': 'DEBIT' if neg else 'CREDIT'})
+        current_date, desc_parts = None, []
+
+    for line in lines:
+        if not line: continue
+        if _itau_is_stop(line): break
+        if ITAU_DATE_RE.match(line):
+            current_date = parse_date(line)
+            desc_parts   = []
+            continue
+        if current_date is None: continue
+        if ITAU_DOC_RE.match(line): continue          # skip CNPJ/CPF
+        if ITAU_VALUE_RE.match(line):
+            flush(line)
+            continue
+        desc_parts.append(line)
+
+    return {'agency': agency, 'account': account, 'transactions': transactions}
+
+
+# ═══════════════════════════════════════════════
 #  Auto-detecting dispatcher
 # ═══════════════════════════════════════════════
 
@@ -913,8 +993,13 @@ def parse_santander(pdf_path):
         raise RuntimeError("PyMuPDF not installed.")
     return _parse_santander(pdf_path)
 
+def parse_itau(pdf_path):
+    if not PYMUPDF_OK:
+        raise RuntimeError("PyMuPDF not installed.")
+    return _parse_itau(pdf_path)
+
 PARSERS = {'bb': parse_bb, 'mp': parse_mp, 'bradesco': parse_bradesco,
-           'btg': parse_btg, 'santander': parse_santander}
+           'btg': parse_btg, 'santander': parse_santander, 'itau': parse_itau}
 
 
 # ═══════════════════════════════════════════════
