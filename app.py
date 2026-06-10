@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PDF → OFX Converter — Brazilian Bank Statements"""
+"""PDF -> OFX Converter — Brazilian Bank Statements"""
 
 import os, re, io, zipfile, tempfile
 from datetime import datetime
@@ -960,6 +960,148 @@ def _parse_itau(pdf_path):
 
 
 # ═══════════════════════════════════════════════
+#  FORMAT ITAU 2 — "extrato mensal" (monthly layout)
+#  Line-anchored: desc line → value line, alternating.
+#  Date DD/MM appears once per day group; year from page
+#  header "ag NNNN cc NNNNN-N abr 2024".
+#  Value column (entradas/saídas/saldo) resolved by x-position
+#  against the per-page column headers; saldo column skipped.
+#  Acronym sidebar on page 0 filtered by x-position (left of
+#  the "data" column).
+# ═══════════════════════════════════════════════
+
+ITAU2_HEADER_RE = re.compile(
+    r'^ag\s+(\d+)\s+cc\s+([\d\-]+)\s+([a-zç]{3})\s+(\d{4})', re.I)
+ITAU2_DATE_RE   = re.compile(r'^\d{2}/\d{2}$')
+ITAU2_VALUE_RE  = re.compile(r'^[\d.]+,\d{2}-?$')
+ITAU2_FOOTER_RE = re.compile(r'^\d{5,}\s+\w+\s+\d{2}/\d{2}/\d{4}\s')  # "254758 B001A 04/05/2024 ..."
+
+ITAU2_MONTHS = {'jan': 1, 'fev': 2, 'mar': 3, 'abr': 4, 'mai': 5, 'jun': 6,
+                'jul': 7, 'ago': 8, 'set': 9, 'out': 10, 'nov': 11, 'dez': 12}
+
+ITAU2_SKIP_LINES = {
+    'extrato mensal', 'data', 'descrição', 'entradas r$', 'saídas r$',
+    'saldo r$', '(créditos)', '(débitos)',
+}
+ITAU2_SKIP_STARTS = ('este material está disponível',)
+ITAU2_STOP_STARTS = ('saldo final', 'totalizador de aplica')
+
+# Fallback column anchors (right edge); overwritten per page from headers
+ITAU2_DEFAULT_COLS = {'ent': 397.0, 'sai': 457.0, 'sal': 550.0}
+
+
+def _itau2_page_lines(page):
+    """Yield (x0, x1, text) per visual line, in stream order."""
+    out = []
+    for block in page.get_text('dict')['blocks']:
+        for line in block.get('lines', []):
+            txt = ''.join(s['text'] for s in line['spans']).strip()
+            if txt:
+                bbox = line['bbox']
+                out.append((bbox[0], bbox[2], txt))
+    return out
+
+
+def _parse_itau_mensal(pdf_path):
+    doc = fitz.open(pdf_path)
+    pages = [_itau2_page_lines(doc[i]) for i in range(len(doc))]
+    doc.close()
+
+    agency, account = '', ''
+    stmt_month, stmt_year = None, None
+    transactions = []
+    current_date = None
+    desc_parts   = []
+    in_table     = False
+    done         = False
+    cols         = dict(ITAU2_DEFAULT_COLS)
+    data_x0      = 148.0   # left edge of "data" column; sidebar lines end left of it
+
+    def flush(amount, trntype):
+        nonlocal desc_parts
+        desc = ' '.join(desc_parts).strip()
+        desc_parts = []
+        if not current_date or not desc:
+            return
+        if desc.lower().startswith('saldo'):
+            return
+        transactions.append({'date': current_date, 'desc': desc,
+                             'amount': amount, 'trntype': trntype})
+
+    for page_lines in pages:
+        if done:
+            break
+        # column anchors from this page's headers
+        # (scan stops at the section end — later tables on the same page,
+        #  e.g. "totalizador de aplicações automáticas", reuse header names
+        #  like "data" at different x-positions)
+        for x0, x1, txt in page_lines:
+            lo = txt.lower().strip()
+            if any(re.sub(r'\s+', ' ', lo).startswith(s) for s in ITAU2_STOP_STARTS):
+                break
+            if lo == 'entradas r$':
+                cols['ent'] = x1
+            elif lo == 'saídas r$':
+                cols['sai'] = x1
+            elif re.sub(r'\s+', ' ', lo) == 'saldo r$':
+                cols['sal'] = x1
+            elif lo == 'data':
+                data_x0 = x0 - 2
+
+        for x0, x1, txt in page_lines:
+            lo = re.sub(r'\s+', ' ', txt.lower().strip())
+
+            m = ITAU2_HEADER_RE.match(txt)
+            if m:
+                if not agency:
+                    agency  = m.group(1)
+                    account = re.sub(r'[^\d]', '', m.group(2))
+                if stmt_year is None:
+                    stmt_month = ITAU2_MONTHS.get(m.group(3).lower())
+                    stmt_year  = int(m.group(4))
+                continue
+            if not in_table:
+                if lo.startswith('conta corrente | movimentação'):
+                    in_table = True
+                continue
+            if any(lo.startswith(s) for s in ITAU2_STOP_STARTS):
+                done = True
+                break
+            if lo in ITAU2_SKIP_LINES or any(lo.startswith(s) for s in ITAU2_SKIP_STARTS):
+                continue
+            if ITAU2_FOOTER_RE.match(txt):
+                continue
+            if x1 < data_x0:        # acronym sidebar (page 0)
+                continue
+
+            if ITAU2_DATE_RE.match(txt):
+                dd, mm = int(txt[:2]), int(txt[3:5])
+                year = stmt_year or datetime.now().year
+                if stmt_month and mm > stmt_month:   # "Saldo anterior" from previous year
+                    year -= 1
+                current_date = f'{year:04d}{mm:02d}{dd:02d}'
+                desc_parts = []
+                continue
+
+            if ITAU2_VALUE_RE.match(txt):
+                # classify by nearest column right edge
+                col = min(cols, key=lambda k: abs(cols[k] - x1))
+                if col == 'sal':                     # saldo column → not a transaction
+                    desc_parts = []
+                    continue
+                v = float(txt.rstrip('-').replace('.', '').replace(',', '.'))
+                if col == 'sai':
+                    flush(-v, 'DEBIT')
+                else:
+                    flush(v, 'CREDIT')
+                continue
+
+            desc_parts.append(txt)
+
+    return {'agency': agency, 'account': account, 'transactions': transactions}
+
+
+# ═══════════════════════════════════════════════
 #  Auto-detecting dispatcher
 # ═══════════════════════════════════════════════
 
@@ -996,6 +1138,12 @@ def parse_santander(pdf_path):
 def parse_itau(pdf_path):
     if not PYMUPDF_OK:
         raise RuntimeError("PyMuPDF not installed.")
+    doc = fitz.open(pdf_path)
+    page0 = doc[0].get_text('text')
+    doc.close()
+    first_line = page0.strip().splitlines()[0].strip().lower()
+    if first_line == 'extrato mensal':
+        return _parse_itau_mensal(pdf_path)
     return _parse_itau(pdf_path)
 
 PARSERS = {'bb': parse_bb, 'mp': parse_mp, 'bradesco': parse_bradesco,

@@ -13,3 +13,9 @@ Thumbs.db
 *.csv
 *.zip
 instance/
+build/OFX-Converter/Analysis-00.toc
+build/OFX-Converter/EXE-00.toc
+build/OFX-Converter/OFX-Converter.pkg
+build/OFX-Converter/PKG-00.toc
+build/OFX-Converter/PYZ-00.pyz
+build/OFX-Converter/warn-OFX-Converter.txt
