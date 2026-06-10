@@ -3,7 +3,7 @@
 Conversor local de extratos bancários em PDF para os formatos OFX e CSV.  
 Desenvolvido para escritórios contábeis que processam extratos de múltiplos clientes.
 
-**v1.7.0** — Banco do Brasil · Bradesco · Santander · BTG Pactual · Mercado Pago
+**v1.9.0** — Banco do Brasil · Bradesco · Santander · BTG Pactual · Mercado Pago · Itaú
 
 ---
 
@@ -25,13 +25,14 @@ Desenvolvido para escritórios contábeis que processam extratos de múltiplos c
 | Santander | 033 |
 | BTG Pactual | 208 |
 | Mercado Pago | 323 |
+| Itaú | 341 |
 
 ## Instalação
 
 **Pré-requisito:** Python 3.8 ou superior.
 
 ```bash
-git clone https://github.com/seu-usuario/ofx-converter.git
+git clone https://github.com/danielbertoldo/ofx-converter.git
 cd ofx-converter
 pip install -r requirements.txt
 python app.py

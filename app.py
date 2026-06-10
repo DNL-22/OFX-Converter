@@ -11,7 +11,7 @@ try:
 except ImportError:
     PYMUPDF_OK = False
 
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
