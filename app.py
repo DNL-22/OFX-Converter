@@ -11,7 +11,7 @@ try:
 except ImportError:
     PYMUPDF_OK = False
 
-APP_VERSION = "1.9.0"
+APP_VERSION = "2.0.0"
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
@@ -986,6 +986,21 @@ ITAU2_SKIP_LINES = {
 ITAU2_SKIP_STARTS = ('este material está disponível',)
 ITAU2_STOP_STARTS = ('saldo final', 'totalizador de aplica')
 
+
+def _itau2_is_stop(lo):
+    """True if `lo` (normalised, lower-cased line) is an end-of-statement marker.
+
+    'Saldo final' marks the closing balance at the end of the movement table.
+    It must NOT match the per-day 'Saldo final disponivel' line (the balance
+    released from discounted bills / títulos em cobrança), which appears
+    mid-statement and would otherwise truncate the statement early.
+    """
+    if lo.startswith('totalizador de aplica'):
+        return True
+    if lo.startswith('saldo final') and 'dispon' not in lo:
+        return True
+    return False
+
 # Fallback column anchors (right edge); overwritten per page from headers
 ITAU2_DEFAULT_COLS = {'ent': 397.0, 'sai': 457.0, 'sal': 550.0}
 
@@ -1037,7 +1052,7 @@ def _parse_itau_mensal(pdf_path):
         #  like "data" at different x-positions)
         for x0, x1, txt in page_lines:
             lo = txt.lower().strip()
-            if any(re.sub(r'\s+', ' ', lo).startswith(s) for s in ITAU2_STOP_STARTS):
+            if _itau2_is_stop(re.sub(r'\s+', ' ', lo)):
                 break
             if lo == 'entradas r$':
                 cols['ent'] = x1
@@ -1064,7 +1079,7 @@ def _parse_itau_mensal(pdf_path):
                 if lo.startswith('conta corrente | movimentação'):
                     in_table = True
                 continue
-            if any(lo.startswith(s) for s in ITAU2_STOP_STARTS):
+            if _itau2_is_stop(lo):
                 done = True
                 break
             if lo in ITAU2_SKIP_LINES or any(lo.startswith(s) for s in ITAU2_SKIP_STARTS):
@@ -1154,16 +1169,15 @@ PARSERS = {'bb': parse_bb, 'mp': parse_mp, 'bradesco': parse_bradesco,
 #  OFX generator  (shared by both formats)
 # ═══════════════════════════════════════════════
 
-def generate_ofx(bank_key, company, data):
-    bank    = BANKS[bank_key]
-    txns    = data['transactions']
-    agency  = data.get('agency')  or '0001'
-    account = data.get('account') or '00000000'
-    if not txns: return None, None
+def _write_ofx(bankid, fid, org, agency, account, txns, dt_start=None, dt_end=None):
+    """Core OFX 1.02 SGML writer. Returns the file content string (or None)."""
+    if not txns: return None
+    agency  = agency  or '0001'
+    account = account or '00000000'
 
     dates    = sorted(t['date'] for t in txns)
-    dt_start = data.get('dt_start') or dates[0]
-    dt_end   = data.get('dt_end')   or dates[-1]
+    dt_start = dt_start or dates[0]
+    dt_end   = dt_end   or dates[-1]
 
     counter = {}
     def fitid(d):
@@ -1181,13 +1195,13 @@ def generate_ofx(bank_key, company, data):
     ln('<STATUS>'); ln('<CODE>0</CODE>'); ln('<SEVERITY>INFO</SEVERITY>'); ln('</STATUS>')
     ln(f'<DTSERVER>{dt_end}235959</DTSERVER>')
     ln('<LANGUAGE>POR</LANGUAGE>')
-    ln('<FI>'); ln(f'<ORG>{bank["org"]}</ORG>'); ln(f'<FID>{bank["fid"]}</FID>'); ln('</FI>')
+    ln('<FI>'); ln(f'<ORG>{org}</ORG>'); ln(f'<FID>{fid}</FID>'); ln('</FI>')
     ln('</SONRS>'); ln('</SIGNONMSGSRSV1>')
     ln('<BANKMSGSRSV1>'); ln('<STMTTRNRS>'); ln('<TRNUID>1</TRNUID>')
     ln('<STATUS>'); ln('<CODE>0</CODE>'); ln('<SEVERITY>INFO</SEVERITY>'); ln('</STATUS>')
     ln('<STMTRS>'); ln('<CURDEF>BRL</CURDEF>')
     ln('<BANKACCTFROM>')
-    ln(f'<BANKID>{bank["bankid"]}</BANKID>')
+    ln(f'<BANKID>{bankid}</BANKID>')
     ln(f'<BRANCHID>{agency}</BRANCHID>')
     ln(f'<ACCTID>{account}</ACCTID>')
     ln('<ACCTTYPE>CHECKING</ACCTTYPE>')
@@ -1196,12 +1210,12 @@ def generate_ofx(bank_key, company, data):
     ln(f'<DTSTART>{dt_start}</DTSTART>'); ln(f'<DTEND>{dt_end}</DTEND>')
 
     for t in txns:
-        fid = fitid(t['date'])
+        fid_v = fitid(t['date'])
         ln('<STMTTRN>')
         ln(f'<TRNTYPE>{t["trntype"]}</TRNTYPE>')
         ln(f'<DTPOSTED>{t["date"]}</DTPOSTED>')
         ln(f'<TRNAMT>{t["amount"]:.2f}</TRNAMT>')
-        ln(f'<FITID>{fid}</FITID>'); ln(f'<CHECKNUM>{fid}</CHECKNUM>')
+        ln(f'<FITID>{fid_v}</FITID>'); ln(f'<CHECKNUM>{fid_v}</CHECKNUM>')
         ln(f'<MEMO>{t["desc"]}</MEMO>')
         ln('</STMTTRN>')
 
@@ -1209,10 +1223,28 @@ def generate_ofx(bank_key, company, data):
     ln('<LEDGERBAL>'); ln('<BALAMT>0.00</BALAMT>'); ln(f'<DTASOF>{dt_end}</DTASOF>'); ln('</LEDGERBAL>')
     ln('</STMTRS>'); ln('</STMTTRNRS>'); ln('</BANKMSGSRSV1>'); ln('</OFX>')
 
-    content = '\n'.join(L)
-    period   = dt_end[:6]
-    safe_co  = re.sub(r'_+', '_', re.sub(r'[^\w]', '_', company.lower().strip())).strip('_')
-    return content, f"{bank_key}_{safe_co}_{period}.ofx"
+    return '\n'.join(L)
+
+
+def _safe(s):
+    return re.sub(r'_+', '_', re.sub(r'[^\w]', '_', (s or '').lower().strip())).strip('_')
+
+
+def generate_ofx(bank_key, company, data, period_label=None):
+    bank    = BANKS[bank_key]
+    txns    = data['transactions']
+    agency  = data.get('agency')  or '0001'
+    account = data.get('account') or '00000000'
+    if not txns: return None, None
+
+    dates    = sorted(t['date'] for t in txns)
+    dt_start = data.get('dt_start') or dates[0]
+    dt_end   = data.get('dt_end')   or dates[-1]
+
+    content = _write_ofx(bank["bankid"], bank["fid"], bank["org"],
+                         agency, account, txns, dt_start, dt_end)
+    period  = period_label or dt_end[:6]
+    return content, f"{bank_key}_{_safe(company)}_{_safe(period)}.ofx"
 
 
 # ═══════════════════════════════════════════════
@@ -1254,6 +1286,117 @@ def generate_csv(bank_key, company, data, period_label=None):
 
 
 # ═══════════════════════════════════════════════
+#  OFX / CSV parsing + merge helpers
+# ═══════════════════════════════════════════════
+
+# bankid → bank_key reverse lookup (for preserving FI metadata on merge)
+BANKID_TO_KEY = {b['bankid']: k for k, b in BANKS.items()}
+# also map zero-stripped variants (e.g. "0237" vs "237")
+for _k, _b in list(BANKS.items()):
+    BANKID_TO_KEY.setdefault(_b['bankid'].lstrip('0'), _k)
+
+
+def _ofx_tag(name, s):
+    """First value of an SGML/XML tag (handles <TAG>val and <TAG>val</TAG>)."""
+    m = re.search(rf'<{name}>\s*([^<\r\n]*)', s, re.I)
+    return m.group(1).strip() if m else ''
+
+
+def parse_ofx(content_bytes):
+    """Parse an OFX 1.x SGML (or 2.x XML) bank statement into the standard dict.
+    Returns {bankid, agency, account, transactions:[{date,desc,amount,trntype}]}."""
+    if isinstance(content_bytes, bytes):
+        text = content_bytes.decode('latin-1', errors='replace')
+    else:
+        text = content_bytes
+
+    acct_blk = ''
+    m = re.search(r'<BANKACCTFROM>(.*?)</BANKACCTFROM>', text, re.I | re.S)
+    if m: acct_blk = m.group(1)
+    bankid  = _ofx_tag('BANKID',   acct_blk) or _ofx_tag('BANKID',  text)
+    agency  = _ofx_tag('BRANCHID', acct_blk) or _ofx_tag('BRANCHID', text)
+    account = _ofx_tag('ACCTID',   acct_blk) or _ofx_tag('ACCTID',   text)
+
+    txns = []
+    for blk in re.findall(r'<STMTTRN>(.*?)</STMTTRN>', text, re.I | re.S):
+        dt   = re.sub(r'\D', '', _ofx_tag('DTPOSTED', blk))[:8]
+        amt  = _ofx_tag('TRNAMT', blk)
+        memo = _ofx_tag('MEMO', blk) or _ofx_tag('NAME', blk)
+        ttype = (_ofx_tag('TRNTYPE', blk) or '').upper()
+        if len(dt) != 8 or not amt:
+            continue
+        try:
+            amount = float(amt.replace(',', '.'))
+        except ValueError:
+            continue
+        if not ttype:
+            ttype = 'DEBIT' if amount < 0 else 'CREDIT'
+        txns.append({'date': dt, 'desc': memo, 'amount': amount, 'trntype': ttype})
+
+    return {'bankid': bankid, 'agency': agency, 'account': account, 'transactions': txns}
+
+
+def parse_csv_content(content_bytes):
+    """Parse a CSV produced by this app (Data,Descrição,Valor,Tipo,Conta)."""
+    import csv as _csv
+    if isinstance(content_bytes, bytes):
+        text = content_bytes.decode('utf-8-sig', errors='replace')
+    else:
+        text = content_bytes
+
+    sample = text[:2000]
+    delim = ';' if sample.count(';') > sample.count(',') else ','
+    rows = list(_csv.reader(io.StringIO(text), delimiter=delim))
+
+    txns, account = [], ''
+    for r in rows:
+        if len(r) < 4:
+            continue
+        d, desc, val, tipo = r[0].strip(), r[1].strip(), r[2].strip(), r[3].strip()
+        acct = r[4].strip() if len(r) > 4 else ''
+        dm = re.match(r'(\d{2})/(\d{2})/(\d{4})', d)
+        if not dm:
+            continue   # skips header row and blanks
+        date = f"{dm.group(3)}{dm.group(2)}{dm.group(1)}"
+        try:
+            amount = float(val.replace('.', '').replace(',', '.'))
+        except ValueError:
+            continue
+        tl = tipo.lower()
+        if tl.startswith('déb') or tl.startswith('deb') or amount < 0:
+            trntype = 'DEBIT'
+        else:
+            trntype = 'CREDIT'
+        if acct:
+            account = acct
+        txns.append({'date': date, 'desc': desc, 'amount': amount, 'trntype': trntype})
+
+    return {'bankid': '', 'agency': '', 'account': account, 'transactions': txns}
+
+
+def _flatten(data):
+    """Yield (account, agency, [txns]) from any parser result (handles 'monthly')."""
+    if 'monthly' in data:
+        txns = [t for _, ms in sorted(data['monthly'].items()) for t in ms]
+        yield (data.get('account') or '', data.get('agency') or '', txns)
+    else:
+        yield (data.get('account') or '', data.get('agency') or '',
+               data.get('transactions') or [])
+
+
+def _dedupe(txns):
+    """Sort by date and drop exact duplicates (date + amount + normalised desc)."""
+    seen, out = set(), []
+    for t in sorted(txns, key=lambda x: x['date']):
+        key = (t['date'], round(t['amount'], 2), ' '.join(t['desc'].lower().split()))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
+    return out
+
+
+# ═══════════════════════════════════════════════
 #  Flask routes
 # ═══════════════════════════════════════════════
 
@@ -1263,11 +1406,12 @@ def index():
 
 @app.route('/convert', methods=['POST'])
 def convert():
-    company      = request.form.get('company', '').strip()
-    bank_key     = request.form.get('bank', 'bb')
-    out_format   = request.form.get('format', 'ofx')        # 'ofx' or 'csv'
-    csv_grouping = request.form.get('csv_grouping', 'month') # 'month' or 'single'
-    files        = request.files.getlist('pdfs')
+    company    = request.form.get('company', '').strip()
+    bank_key   = request.form.get('bank', 'bb')
+    out_format = request.form.get('format', 'ofx')        # 'ofx' or 'csv'
+    # Unified grouping (applies to OFX and CSV). 'csv_grouping' kept for compat.
+    grouping   = request.form.get('grouping') or request.form.get('csv_grouping', 'month')
+    files      = request.files.getlist('pdfs')
 
     if not company:
         return jsonify({'error': 'Informe o nome da empresa.'}), 400
@@ -1279,7 +1423,13 @@ def convert():
     if not parser:
         return jsonify({'error': f'Parser não disponível para {bank_key}.'}), 400
 
-    ok, errs = [], []
+    encode    = 'utf-8-sig' if out_format == 'csv' else 'latin-1'
+    generator = generate_csv if out_format == 'csv' else generate_ofx
+    ext       = 'csv' if out_format == 'csv' else 'ofx'
+    ok, errs  = [], []
+
+    # ── Parse every PDF up front ──────────────────────────────────────
+    parsed = []   # list of parser-result dicts
     with tempfile.TemporaryDirectory() as tmp:
         for f in files:
             name = f.filename or ''
@@ -1289,60 +1439,157 @@ def convert():
             path = os.path.join(tmp, os.path.basename(name))
             f.save(path)
             try:
-                data = parser(path)
-                encode = 'utf-8-sig' if out_format == 'csv' else 'latin-1'
-
-                if 'monthly' in data:
-                    if not data['monthly']:
-                        errs.append(f"{name}: nenhuma transação encontrada.")
-                        continue
-                    if out_format == 'csv' and csv_grouping == 'single':
-                        # Merge all months into one CSV
-                        all_txns = [t for _, txns in sorted(data['monthly'].items()) for t in txns]
-                        flat = {'agency': data['agency'], 'account': data['account'],
-                                'transactions': all_txns}
-                        months = sorted(data['monthly'].keys())
-                        label  = f"{months[0]}_{months[-1]}" if len(months) > 1 else months[0]
-                        content, fname = generate_csv(bank_key, company, flat, period_label=label)
-                        if content:
-                            ok.append((fname, content.encode(encode)))
-                    else:
-                        generator = generate_csv if out_format == 'csv' else generate_ofx
-                        for ym, txns in sorted(data['monthly'].items()):
-                            flat = {'agency': data['agency'], 'account': data['account'],
-                                    'transactions': txns,
-                                    'dt_start': txns[0]['date'], 'dt_end': txns[-1]['date']}
-                            content, fname = generator(bank_key, company, flat)
-                            if content:
-                                ok.append((fname, content.encode(encode)))
-                else:
-                    generator = generate_csv if out_format == 'csv' else generate_ofx
-                    content, fname = generator(bank_key, company, data)
-                    if content is None:
-                        errs.append(f"{name}: nenhuma transação encontrada.")
-                        continue
-                    ok.append((fname, content.encode(encode)))
+                parsed.append(parser(path))
             except Exception as e:
                 errs.append(f"{name}: {e}")
+
+    # ── SINGLE: merge everything into one file per account ────────────
+    if grouping == 'single':
+        from collections import OrderedDict
+        groups = OrderedDict()   # account -> {'agency':str, 'txns':[]}
+        for data in parsed:
+            for account, agency, txns in _flatten(data):
+                g = groups.setdefault(account, {'agency': agency, 'txns': []})
+                if not g['agency'] and agency:
+                    g['agency'] = agency
+                g['txns'].extend(txns)
+
+        multi = len([a for a, g in groups.items() if g['txns']]) > 1
+        for account, g in groups.items():
+            txns = _dedupe(g['txns'])
+            if not txns:
+                continue
+            label = f"{txns[0]['date'][:6]}_{txns[-1]['date'][:6]}"
+            if multi and account:
+                label = f"{account}_{label}"
+            flat = {'agency': g['agency'], 'account': account, 'transactions': txns,
+                    'dt_start': txns[0]['date'], 'dt_end': txns[-1]['date']}
+            content, fname = generator(bank_key, company, flat, period_label=label)
+            if content:
+                ok.append((fname, content.encode(encode)))
+
+    # ── MONTH (default): one file per source / per month ──────────────
+    else:
+        for data in parsed:
+            if 'monthly' in data:
+                if not data['monthly']:
+                    errs.append("Nenhuma transação encontrada.")
+                    continue
+                for ym, txns in sorted(data['monthly'].items()):
+                    flat = {'agency': data['agency'], 'account': data['account'],
+                            'transactions': txns,
+                            'dt_start': txns[0]['date'], 'dt_end': txns[-1]['date']}
+                    content, fname = generator(bank_key, company, flat)
+                    if content:
+                        ok.append((fname, content.encode(encode)))
+            else:
+                content, fname = generator(bank_key, company, data)
+                if content is None:
+                    errs.append("Nenhuma transação encontrada.")
+                    continue
+                ok.append((fname, content.encode(encode)))
 
     if not ok:
         return jsonify({'error': errs[0] if errs else 'Falha na conversão.'}), 400
 
+    return _send_results(ok, errs)
+
+
+def _send_results(ok, errs, zip_name='ofx_convertidos.zip'):
+    """Send a single file directly, or a zip when there are several outputs."""
     if len(ok) == 1 and not errs:
         fname, data = ok[0]
         mime = 'text/csv' if fname.endswith('.csv') else 'application/x-ofx'
         return send_file(io.BytesIO(data), as_attachment=True,
                          download_name=fname, mimetype=mime)
 
-    buf = io.BytesIO()
+    used = {}
+    buf  = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         for fname, data in ok:
+            # guarantee unique entry names inside the archive
+            n = used.get(fname, 0)
+            used[fname] = n + 1
+            if n:
+                stem, dot, extn = fname.rpartition('.')
+                fname = f"{stem}_{n+1}.{extn}" if dot else f"{fname}_{n+1}"
             zf.writestr(fname, data)
         if errs:
             zf.writestr('_erros.txt', '\n'.join(errs))
     buf.seek(0)
     return send_file(buf, as_attachment=True,
-                     download_name='ofx_convertidos.zip', mimetype='application/zip')
+                     download_name=zip_name, mimetype='application/zip')
+
+
+@app.route('/merge', methods=['POST'])
+def merge():
+    """Merge uploaded .ofx / .csv files into one OFX per account (deduped)."""
+    company = request.form.get('company', '').strip()
+    files   = request.files.getlist('files')
+
+    if not files or not files[0].filename:
+        return jsonify({'error': 'Nenhum arquivo enviado.'}), 400
+
+    from collections import OrderedDict
+    groups = OrderedDict()   # account -> {'agency':str, 'bankid':str, 'txns':[]}
+    errs   = []
+
+    for f in files:
+        name = f.filename or ''
+        low  = name.lower()
+        try:
+            raw = f.read()
+            if low.endswith('.ofx'):
+                data = parse_ofx(raw)
+            elif low.endswith('.csv'):
+                data = parse_csv_content(raw)
+            else:
+                if name: errs.append(f"{name}: tipo não suportado (use .ofx ou .csv).")
+                continue
+        except Exception as e:
+            errs.append(f"{name}: {e}")
+            continue
+
+        if not data['transactions']:
+            errs.append(f"{name}: nenhuma transação encontrada.")
+            continue
+
+        account = data.get('account') or ''
+        g = groups.setdefault(account, {'agency': '', 'bankid': '', 'txns': []})
+        if not g['agency'] and data.get('agency'):
+            g['agency'] = data['agency']
+        if not g['bankid'] and data.get('bankid'):
+            g['bankid'] = data['bankid']
+        g['txns'].extend(data['transactions'])
+
+    ok    = []
+    multi = len([a for a, g in groups.items() if g['txns']]) > 1
+    for account, g in groups.items():
+        txns = _dedupe(g['txns'])
+        if not txns:
+            continue
+        bankid = g['bankid'] or '000'
+        key    = BANKID_TO_KEY.get(bankid) or BANKID_TO_KEY.get(bankid.lstrip('0'))
+        if key:
+            b = BANKS[key]
+            bankid, fid, org, prefix = b['bankid'], b['fid'], b['org'], key
+        else:
+            fid, org, prefix = bankid, 'Banco', 'merged'
+        content = _write_ofx(bankid, fid, org, g['agency'], account, txns,
+                             txns[0]['date'], txns[-1]['date'])
+        if not content:
+            continue
+        label = f"{txns[0]['date'][:6]}_{txns[-1]['date'][:6]}"
+        if multi and account:
+            label = f"{account}_{label}"
+        co    = _safe(company) or 'merge'
+        fname = f"{prefix}_{co}_{_safe(label)}.ofx"
+        ok.append((fname, content.encode('latin-1')))
+
+    if not ok:
+        return jsonify({'error': errs[0] if errs else 'Nenhuma transação para mesclar.'}), 400
+
+    return _send_results(ok, errs, zip_name='ofx_mesclados.zip')
 
 
 @app.route('/shutdown', methods=['POST'])

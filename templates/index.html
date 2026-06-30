@@ -274,6 +274,34 @@ footer{
   transition:color .15s,border-color .15s;
 }
 #btn-shutdown:hover{color:var(--red);border-color:var(--red)}
+
+/* ── Tabs ── */
+.tabs{
+  display:flex;gap:6px;margin-top:24px;
+}
+.tab-btn{
+  padding:10px 18px;border-radius:9px 9px 0 0;cursor:pointer;
+  font-family:var(--mono);font-size:.78rem;font-weight:600;letter-spacing:.03em;
+  border:1px solid transparent;border-bottom:none;
+  background:none;color:var(--muted);
+  display:flex;align-items:center;gap:8px;
+  transition:all .15s;
+}
+.tab-btn:hover{color:var(--text)}
+.tab-btn.active{
+  color:var(--accent);background:var(--card);
+  border-color:var(--border);
+}
+.tab-btn svg{flex-shrink:0}
+.tab-pane{display:none}
+.tab-pane.active{display:block}
+
+/* ── Grouping toggle (shared) ── */
+.grouping-box{margin-top:16px}
+.grouping-box .sub-label{
+  font-size:.68rem;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;
+  margin-bottom:6px;font-family:var(--mono);
+}
 </style>
 </head>
 <body>
@@ -297,6 +325,27 @@ footer{
 
 <!-- ── Main ── -->
 <main>
+
+  <!-- Tab navigation -->
+  <div class="tabs">
+    <button type="button" class="tab-btn active" data-tab="convert">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/>
+        <polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/>
+      </svg>
+      Converter PDF
+    </button>
+    <button type="button" class="tab-btn" data-tab="merge">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M7 4v6a3 3 0 0 0 3 3h8"/><path d="M7 20v-6"/>
+        <polyline points="15 9 18 13 21 9"/>
+      </svg>
+      Mesclar OFX
+    </button>
+  </div>
+
+  <!-- ═══ TAB: Converter ═══ -->
+  <div class="tab-pane active" id="tab-convert">
 
   <!-- Conversion form -->
   <div class="card">
@@ -338,12 +387,12 @@ footer{
       </button>
     </div>
 
-    <!-- CSV grouping sub-toggle (shown only when CSV is active) -->
-    <div id="csv-grouping">
+    <!-- Grouping sub-toggle (applies to OFX and CSV) -->
+    <div id="grouping-box" class="grouping-box">
       <p class="sub-label">Agrupamento</p>
       <div class="grp-toggle">
         <button type="button" class="grp-btn active" data-grp="month">Por mês</button>
-        <button type="button" class="grp-btn" data-grp="single">Arquivo único</button>
+        <button type="button" class="grp-btn" data-grp="single">Arquivo único (mesclado)</button>
       </div>
     </div>
 
@@ -392,6 +441,49 @@ footer{
       {% endfor %}
     </div>
   </div>
+
+  </div><!-- #tab-convert -->
+
+  <!-- ═══ TAB: Mesclar OFX ═══ -->
+  <div class="tab-pane" id="tab-merge">
+  <div class="card">
+    <p class="section-label">Mesclar arquivos OFX / CSV</p>
+
+    <label class="field" style="margin-bottom:4px">
+      <span>Nome da Empresa (opcional)</span>
+      <input type="text" id="merge-company" placeholder="Usado no nome do arquivo" autocomplete="off">
+    </label>
+
+    <!-- Merge drop zone -->
+    <div class="dropzone" id="merge-dz">
+      <input type="file" id="merge-input" accept=".ofx,.csv" multiple>
+      <div class="dz-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.8">
+          <path d="M7 4v6a3 3 0 0 0 3 3h8"/><path d="M7 20v-6"/>
+          <polyline points="15 9 18 13 21 9"/>
+        </svg>
+      </div>
+      <h3>Arraste os arquivos OFX/CSV aqui</h3>
+      <p>ou clique para selecionar — serão mesclados em um único OFX por conta</p>
+      <span class="dz-label">Duplicados são removidos automaticamente</span>
+    </div>
+
+    <!-- Merge file list -->
+    <div id="merge-list"></div>
+
+    <!-- Merge button -->
+    <button id="btn-merge" disabled>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <path d="M7 4v6a3 3 0 0 0 3 3h8"/><path d="M7 20v-6"/>
+        <polyline points="15 9 18 13 21 9"/>
+      </svg>
+      Mesclar
+    </button>
+
+    <!-- Merge status -->
+    <div id="merge-status" style="display:none;margin-top:20px"></div>
+  </div>
+  </div><!-- #tab-merge -->
 
 </main>
 
@@ -489,10 +581,19 @@ footer{
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  // ── Tab switching ──
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
   // ── Format toggle ──
   let currentFormat = 'ofx';
   let currentGrouping = 'month';
-  const csvGroupingEl = document.getElementById('csv-grouping');
 
   document.querySelectorAll('.fmt-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -500,7 +601,6 @@ footer{
       btn.classList.add('active');
       currentFormat = btn.dataset.fmt;
       document.getElementById('fmt-label').textContent = btn.dataset.fmt.toUpperCase();
-      csvGroupingEl.style.display = currentFormat === 'csv' ? 'block' : 'none';
     });
   });
 
@@ -529,7 +629,7 @@ footer{
     fd.append('company', company);
     fd.append('bank', bankEl.value);
     fd.append('format', currentFormat);
-    fd.append('csv_grouping', currentGrouping);
+    fd.append('grouping', currentGrouping);
     files.forEach(f => fd.append('pdfs', f));
 
     try {
@@ -591,6 +691,116 @@ footer{
   }
 
   function hideStatus() { statusEl.style.display = 'none'; statusEl.innerHTML = ''; }
+
+  // ════════════════════════════════════════════
+  //  Merge tab
+  // ════════════════════════════════════════════
+  const mDz      = document.getElementById('merge-dz');
+  const mInput   = document.getElementById('merge-input');
+  const mList    = document.getElementById('merge-list');
+  const btnMerge = document.getElementById('btn-merge');
+  const mStatus  = document.getElementById('merge-status');
+  const mCompany = document.getElementById('merge-company');
+  let mFiles = [];
+
+  mDz.addEventListener('dragover', e => { e.preventDefault(); mDz.classList.add('hover'); });
+  mDz.addEventListener('dragleave', () => mDz.classList.remove('hover'));
+  mDz.addEventListener('drop', e => {
+    e.preventDefault(); mDz.classList.remove('hover');
+    addMergeFiles([...e.dataTransfer.files]);
+  });
+  mInput.addEventListener('change', e => { addMergeFiles([...e.target.files]); mInput.value = ''; });
+
+  function addMergeFiles(newFiles) {
+    newFiles.forEach(f => {
+      const lo = f.name.toLowerCase();
+      if ((lo.endsWith('.ofx') || lo.endsWith('.csv')) && !mFiles.find(x => x.name === f.name))
+        mFiles.push(f);
+    });
+    renderMergeList();
+  }
+  function removeMergeFile(name) { mFiles = mFiles.filter(f => f.name !== name); renderMergeList(); }
+
+  function renderMergeList() {
+    mList.innerHTML = '';
+    if (mFiles.length === 0) { mList.style.display = 'none'; btnMerge.disabled = true; return; }
+    mList.style.display = 'flex';
+    mFiles.forEach(f => {
+      const el = document.createElement('div');
+      el.className = 'file-item';
+      el.innerHTML = `
+        <div class="fi-icon">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2">
+            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+            <polyline points="13 2 13 9 20 9"/>
+          </svg>
+        </div>
+        <span class="fi-name" title="${esc(f.name)}">${esc(f.name)}</span>
+        <span class="fi-size">${fmtSize(f.size)}</span>
+        <button class="file-rm" data-name="${esc(f.name)}" title="Remover">✕</button>`;
+      mList.appendChild(el);
+    });
+    mList.querySelectorAll('.file-rm').forEach(btn => {
+      btn.addEventListener('click', () => removeMergeFile(btn.dataset.name));
+    });
+    btnMerge.disabled = mFiles.length === 0;
+  }
+
+  function setMergeLoading(on) {
+    btnMerge.disabled = on;
+    btnMerge.innerHTML = on
+      ? '<div class="spinner"></div> Mesclando…'
+      : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+           <path d="M7 4v6a3 3 0 0 0 3 3h8"/><path d="M7 20v-6"/><polyline points="15 9 18 13 21 9"/>
+         </svg> Mesclar`;
+  }
+
+  function showMergeStatus(type, html) {
+    mStatus.style.display = 'block';
+    const icon = type === 'ok'
+      ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`
+      : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+    mStatus.innerHTML =
+      `<div class="status-${type==='ok'?'ok':'err'}">
+         <div class="s-icon">${icon}</div><div class="s-text">${html}</div>
+       </div>`;
+  }
+
+  btnMerge.addEventListener('click', async () => {
+    if (mFiles.length === 0) return;
+    setMergeLoading(true);
+    mStatus.style.display = 'none';
+
+    const fd = new FormData();
+    fd.append('company', mCompany.value.trim());
+    mFiles.forEach(f => fd.append('files', f));
+
+    try {
+      const res = await fetch('/merge', { method: 'POST', body: fd });
+      if (!res.ok) {
+        let msg = 'Erro ao mesclar.';
+        try { const j = await res.json(); msg = j.error || msg; } catch {}
+        showMergeStatus('error', msg);
+        return;
+      }
+      const cd = res.headers.get('Content-Disposition') || '';
+      const m  = cd.match(/filename[^;=\n]*=["']?([^"'\n;]+)["']?/);
+      const fname = m ? m[1] : 'ofx_mesclados.zip';
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = fname; a.click();
+      URL.revokeObjectURL(url);
+      showMergeStatus('ok',
+        `<div class="s-title">Download iniciado!</div>
+         <div>${mFiles.length} arquivo${mFiles.length>1?'s':''} mesclado${mFiles.length>1?'s':''} → <strong>${esc(fname)}</strong></div>`);
+    } catch(err) {
+      showMergeStatus('error', 'Falha de rede: ' + err.message);
+    } finally {
+      setMergeLoading(false);
+    }
+  });
+
   // ── Shutdown ──
   document.getElementById('btn-shutdown').addEventListener('click', async () => {
     if (!confirm('Encerrar o servidor?')) return;
